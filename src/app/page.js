@@ -40,7 +40,7 @@ const Home = () => {
 
   const handleJoinGame = (selectedGameId) => {
     setGameId(selectedGameId);
-    router.push(`/game/${selectedGameId}`); 
+    router.push(`/GameLobby/${selectedGameId}`); 
   };
 
   return (
