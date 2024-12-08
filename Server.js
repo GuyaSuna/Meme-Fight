@@ -13,20 +13,16 @@ const io = new Server(server, {
   },
 });
 
-
-app.use(cors()); 
-app.use(express.json()); 
+app.use(cors());
+app.use(express.json());
 
 let games = new Map();
-let players = [];
 
 app.post("/create-game", (req, res) => {
-  const gameId = uuidv4(); 
+  const gameId = uuidv4();
   games.set(gameId, { players: [], memes: [], currentSituation: "" });
-  console.log("Sala creada con ID:", gameId);
-  res.status(200).json({ gameId }); 
+  res.status(200).json({ gameId });
 });
-
 
 app.get("/games", (req, res) => {
   const gameList = Array.from(games.entries()).map(([gameId, game]) => ({
@@ -43,14 +39,15 @@ app.post("/join-game", (req, res) => {
     return res.status(404).json({ error: "La sala no existe." });
   }
 
-  const game = games.get(selectedGameId);
-
   if (!playerName) {
     return res.status(400).json({ error: "El nombre del jugador no puede estar vacío." });
   }
 
-  game.players.push({ id: uuidv4(), username: playerName, score: 0 });
+  const game = games.get(selectedGameId);
+  const newPlayer = { id: uuidv4(), username: playerName, score: 0, ready: false };
+  game.players.push(newPlayer);
 
+  io.to(selectedGameId).emit("update-players", game.players);
   res.status(200).json({ message: "Unido correctamente al juego.", players: game.players });
 });
 
@@ -62,11 +59,11 @@ app.post("/start-game", (req, res) => {
   }
 
   const game = games.get(gameId);
-
   const player = game.players.find((p) => p.id === playerId);
   if (!player) {
     return res.status(404).json({ error: "El jugador no existe en la sala." });
   }
+
   player.ready = true;
 
   const allReady = game.players.every((p) => p.ready);
@@ -80,73 +77,67 @@ app.post("/start-game", (req, res) => {
 
 app.get("/game-players/:gameId", (req, res) => {
   const { gameId } = req.params;
-  console.log("Solicitud para jugadores de la sala con ID:", gameId);
-  
+
   if (!games.has(gameId)) {
-    console.error("Sala no encontrada:", gameId);
     return res.status(404).json({ message: `Sala no encontrada: ${gameId}` });
   }
-  
+
   const game = games.get(gameId);
-  console.log("Jugadores encontrados:", game.players);
   return res.status(200).json({ players: game.players });
 });
-
-
-
 
 io.on("connection", (socket) => {
   console.log(`Usuario conectado: ${socket.id}`);
 
-  socket.on("join-game", (username) => {
-    if (!username) {
-      socket.emit("error", "El nombre de usuario no puede estar vacío");
+  socket.on("join-room", (gameId) => {
+    socket.join(gameId);
+  });
+
+  socket.on("join-game", ({ selectedGameId, playerName }, callback) => {
+    if (!games.has(selectedGameId)) {
+      callback({ error: "La sala no existe." });
       return;
     }
-    players.push({ id: socket.id, username, score: 0 });
-    io.emit("update-players", players);
-  });
 
-  socket.on("start-game", () => {
-    console.log("El juego ha comenzado.");
-    const situation = "Estás atrapado en una isla desierta. ¿Cómo sobrevives?";
-    io.emit("game-started", situation);
-  });
+    const game = games.get(selectedGameId);
 
-  socket.on("join-game", (gameId) => {
-    if (!games.has(gameId)) {
-      games.set(gameId, { players: [], memes: [], currentSituation: "" });
+    if (game.players.some((p) => p.username === playerName)) {
+      callback({ error: "El jugador ya está en la sala." });
+      return;
     }
-    const game = games.get(gameId);
-    game.players.push({ id: socket.id, username: socket.username || "Anónimo", score: 0 });
-    socket.join(gameId);
-    io.to(gameId).emit("update-players", game.players);
+
+    const newPlayer = { id: socket.id, username: playerName, score: 0, ready: false };
+    game.players.push(newPlayer);
+
+    io.to(selectedGameId).emit("update-players", game.players);
+    callback({ playerId: newPlayer.id });
   });
 
-  socket.on("submit-meme", ({ gameId, meme }) => {
-    if (games.has(gameId)) {
-      const game = games.get(gameId);
-      game.memes.push({ id: socket.id, meme });
-      io.to(gameId).emit("new-meme", game.memes);
-    }
-  });
-
-  socket.on("vote-meme", ({ gameId, memeId }) => {
+  socket.on("player-ready", ({ gameId, playerId }) => {
     const game = games.get(gameId);
     if (!game) return;
-    const meme = game.memes.find((m) => m.id === memeId);
-    if (meme) {
-      meme.votes = (meme.votes || 0) + 1;
-      io.to(gameId).emit("new-meme", game.memes);
+
+    const player = game.players.find((p) => p.id === playerId);
+    if (player) {
+      player.ready = true;
+      io.to(gameId).emit("update-players", game.players);
+
+      const allReady = game.players.every((p) => p.ready);
+      if (allReady) {
+        io.to(gameId).emit("game-started", { message: "¡Todos los jugadores están listos! ¡Comienza el juego!" });
+      }
     }
   });
 
   socket.on("disconnect", () => {
-    players = players.filter((player) => player.id !== socket.id);
-    io.emit("update-players", players);
     console.log(`Usuario desconectado: ${socket.id}`);
+    for (const [gameId, game] of games.entries()) {
+      game.players = game.players.filter((player) => player.id !== socket.id);
+      io.to(gameId).emit("update-players", game.players);
+    }
   });
 });
+
 
 server.listen(3001, () => {
   console.log("Servidor corriendo en http://localhost:3001");
