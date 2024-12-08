@@ -23,8 +23,10 @@ let players = [];
 app.post("/create-game", (req, res) => {
   const gameId = uuidv4(); 
   games.set(gameId, { players: [], memes: [], currentSituation: "" });
+  console.log("Sala creada con ID:", gameId);
   res.status(200).json({ gameId }); 
 });
+
 
 app.get("/games", (req, res) => {
   const gameList = Array.from(games.entries()).map(([gameId, game]) => ({
@@ -33,6 +35,64 @@ app.get("/games", (req, res) => {
   }));
   res.status(200).json(gameList);
 });
+
+app.post("/join-game", (req, res) => {
+  const { selectedGameId, playerName } = req.body;
+
+  if (!games.has(selectedGameId)) {
+    return res.status(404).json({ error: "La sala no existe." });
+  }
+
+  const game = games.get(selectedGameId);
+
+  if (!playerName) {
+    return res.status(400).json({ error: "El nombre del jugador no puede estar vacío." });
+  }
+
+  game.players.push({ id: uuidv4(), username: playerName, score: 0 });
+
+  res.status(200).json({ message: "Unido correctamente al juego.", players: game.players });
+});
+
+app.post("/start-game", (req, res) => {
+  const { gameId, playerId } = req.body;
+
+  if (!games.has(gameId)) {
+    return res.status(404).json({ error: "La sala no existe." });
+  }
+
+  const game = games.get(gameId);
+
+  const player = game.players.find((p) => p.id === playerId);
+  if (!player) {
+    return res.status(404).json({ error: "El jugador no existe en la sala." });
+  }
+  player.ready = true;
+
+  const allReady = game.players.every((p) => p.ready);
+  if (allReady) {
+    io.to(gameId).emit("game-started", { message: "Todos los jugadores están listos. ¡Comienza el juego!" });
+    return res.status(200).json({ message: "Todos los jugadores están listos. ¡Comienza el juego!" });
+  }
+
+  res.status(200).json({ message: "Esperando a que todos los jugadores estén listos." });
+});
+
+app.get("/game-players/:gameId", (req, res) => {
+  const { gameId } = req.params;
+  console.log("Solicitud para jugadores de la sala con ID:", gameId);
+  
+  if (!games.has(gameId)) {
+    console.error("Sala no encontrada:", gameId);
+    return res.status(404).json({ message: `Sala no encontrada: ${gameId}` });
+  }
+  
+  const game = games.get(gameId);
+  console.log("Jugadores encontrados:", game.players);
+  return res.status(200).json({ players: game.players });
+});
+
+
 
 
 io.on("connection", (socket) => {
@@ -53,7 +113,7 @@ io.on("connection", (socket) => {
     io.emit("game-started", situation);
   });
 
-  socket.on("join-room", (gameId) => {
+  socket.on("join-game", (gameId) => {
     if (!games.has(gameId)) {
       games.set(gameId, { players: [], memes: [], currentSituation: "" });
     }
