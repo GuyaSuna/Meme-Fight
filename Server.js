@@ -18,12 +18,15 @@ app.use(express.json());
 
 let games = {};
 
+// Crear una nueva sala de juego
 app.post("/create-game", (req, res) => {
   const gameId = uuidv4();
-  games[gameId] = { players: [], memes: [], currentSituation: "" };
+  games[gameId] = { players: [], memes: [], currentSituation: "", timer: null };
+  console.log(`[Game ${gameId}] Sala creada.`);
   res.status(200).json({ gameId });
 });
 
+// Listar todas las salas disponibles
 app.get("/games", (req, res) => {
   const gameList = Object.entries(games).map(([gameId, game]) => ({
     gameId,
@@ -32,9 +35,9 @@ app.get("/games", (req, res) => {
   res.status(200).json(gameList);
 });
 
+// Obtener los jugadores de una sala específica
 app.get("/game-players/:gameId", (req, res) => {
   const { gameId } = req.params;
-
   if (!games[gameId]) {
     return res.status(404).json({ message: `Sala no encontrada: ${gameId}` });
   }
@@ -43,20 +46,25 @@ app.get("/game-players/:gameId", (req, res) => {
   return res.status(200).json({ players: game.players });
 });
 
+// Manejo de eventos de WebSocket
 io.on("connection", (socket) => {
   console.log(`Usuario conectado: ${socket.id}`);
 
   socket.on("join-room", (gameId) => {
+    if (!games[gameId]) {
+      console.error(`[Game ${gameId}] Sala no encontrada para unirse.`);
+      return;
+    }
     socket.join(gameId);
+    console.log(`[Game ${gameId}] Usuario ${socket.id} unido.`);
   });
 
   socket.on("join-game", ({ selectedGameId, playerName }, callback) => {
-    if (!games[selectedGameId]) {
+    const game = games[selectedGameId];
+    if (!game) {
       callback({ error: "La sala no existe." });
       return;
     }
-
-    const game = games[selectedGameId];
 
     const existingPlayer = game.players.find(
       (p) => p.id === socket.id || p.username === playerName
@@ -71,66 +79,97 @@ io.on("connection", (socket) => {
 
     io.to(selectedGameId).emit("update-players", game.players);
     callback({ playerId: newPlayer.id });
+    console.log(`[Game ${selectedGameId}] Jugador agregado: ${playerName}`);
   });
 
   socket.on("player-ready", ({ gameId, playerId }) => {
     const game = games[gameId];
     if (!game) return;
-  
+
     const player = game.players.find((p) => p.id === playerId);
     if (player) {
       player.ready = true;
       io.to(gameId).emit("update-players", game.players);
-  
-      const allReady = game.players.every((p) => p.ready); 
+
+      const allReady = game.players.every((p) => p.ready);
       if (allReady && game.players.length > 0) {
         const randomSituation = generateRandomSituation();
         game.currentSituation = randomSituation;
-        io.to(gameId).emit("game-start", { situation: randomSituation });
-        console.log(`Juego ${gameId} iniciado: ${randomSituation}`);
+        io.to(gameId).emit("game-start", { 
+          situation: randomSituation, 
+          timeRemaining: 60 
+        });
+
+        startRound(gameId);
       }
     }
   });
 
-  socket.on("leave-game", ({ gameId, playerId }) => {
-    if (!games[gameId]) return;
-
+  socket.on("send-meme", ({ gameId, memeUrl }) => {
     const game = games[gameId];
-    game.players = game.players.filter((player) => player.id !== playerId);
+    if (!game) return;
 
+    game.memes.push({ memeUrl, playerId: socket.id });
+    io.to(gameId).emit("update-memes", game.memes);
+  });
+
+  socket.on("leave-game", ({ gameId, playerId }) => {
+    const game = games[gameId];
+    if (!game) return;
+
+    game.players = game.players.filter((p) => p.id !== playerId);
     io.to(gameId).emit("update-players", game.players);
-    console.log(`Jugador ${playerId} salió del juego ${gameId}`);
-
-    if (game.players.length === 0) {
-      delete games[gameId]; // Limpiar la sala si no quedan jugadores
-    }
+    socket.leave(gameId);
   });
 
   socket.on("disconnect", () => {
     console.log(`Usuario desconectado: ${socket.id}`);
-    for (const [gameId, game] of Object.entries(games)) {
-      game.players = game.players.filter((player) => player.id !== socket.id);
-      io.to(gameId).emit("update-players", game.players);
-
-      if (game.players.length === 0) {
-        delete games[gameId];
-      }
-    }
   });
 });
 
 const generateRandomSituation = () => {
   const situations = [
-    "Estás perdido en un bosque encantado.",
-    "Una tormenta repentina te obliga a refugiarte en una cueva.",
-    "Encuentras un cofre con un tesoro misterioso.",
-    "Una criatura mágica necesita tu ayuda.",
-    "Tienes que resolver un enigma para cruzar un puente.",
+    "Estás en una fiesta muy rara.",
+    "Estás perdido en el bosque.",
+    "Te han contratado como espía.",
+    "Estás en una prueba de supervivencia.",
   ];
-
   return situations[Math.floor(Math.random() * situations.length)];
 };
 
+const calculateWinner = (gameId) => {
+  const game = games[gameId];
+  if (!game) return null;
+
+  return game.players[Math.floor(Math.random() * game.players.length)];
+};
+
+const startRound = (gameId) => {
+  const game = games[gameId];
+  if (!game) {
+    console.error(`[Game ${gameId}] No se encontró el juego.`);
+    return;
+  }
+
+  let timeRemaining = 60;
+  console.log(`[Game ${gameId}] Iniciando ronda con ${timeRemaining} segundos.`);
+
+  game.timer = setInterval(() => {
+    if (timeRemaining >= 0) {
+      const serverTimestamp = Date.now();
+      io.to(gameId).emit("update-time", { 
+        timeRemaining, 
+        serverTimestamp 
+      });
+      timeRemaining--;
+    } else {
+      clearInterval(game.timer);
+      io.to(gameId).emit("round-end", { winner: calculateWinner(gameId) });
+      console.log(`[Game ${gameId}] Fin de la ronda.`);
+    }
+  }, 1000);
+};
+
 server.listen(3001, () => {
-  console.log("Servidor corriendo en http://localhost:3001");
+  console.log("Servidor iniciado en http://localhost:3001");
 });

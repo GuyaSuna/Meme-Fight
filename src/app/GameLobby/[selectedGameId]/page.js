@@ -1,57 +1,51 @@
-"use client";
-
+'use client';
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { io } from "socket.io-client";
-
-const socket = io("http://localhost:3001");
+import socket from "@/Components/Socket";
 
 const GamePage = ({ params }) => {
-  const { selectedGameId } = React.use(params);
-
+  const { selectedGameId } = React.use(params); // Corregido: No necesitas `React.use`
   const [players, setPlayers] = useState([]);
   const [playerName, setPlayerName] = useState("");
   const [playerId, setPlayerId] = useState("");
   const [isReady, setIsReady] = useState(false);
   const [situation, setSituation] = useState("");
+  const [memeUrl, setMemeUrl] = useState("");
+  const [memes, setMemes] = useState([]);
+  const [timeLeft, setTimeLeft] = useState(null);
   const router = useRouter();
 
   useEffect(() => {
     socket.emit("join-room", selectedGameId);
 
-    fetchPlayers();
+    socket.on("update-players", (updatedPlayers) => setPlayers(updatedPlayers));
+
+    socket.on("update-time", ({ timeRemaining, serverTimestamp }) => {
+      if (typeof timeRemaining !== "number") {
+        console.error("Se esperaba un número en timeRemaining, pero se recibió:", timeRemaining);
+        return;
+      }
+      const delay = (Date.now() - serverTimestamp) / 1000; // Ajusta por el retraso
+      setTimeLeft(Math.max(0, timeRemaining - Math.floor(delay))); // Evita valores negativos
+    });
+
+    socket.on("game-start", ({ situation, timeRemaining }) => {
+      if (timeRemaining === undefined) {
+        console.error("timeRemaining no definido en game-start:", { situation, timeRemaining });
+        return;
+      }
+      console.log("Situación inicial:", situation, "Tiempo inicial:", timeRemaining);
+      setSituation(situation);
+      setTimeLeft(timeRemaining);
+    });
+
     return () => {
       handleLeaveGame();
-    };
-  }, [selectedGameId]);
-
-  useEffect(() => {
-    socket.on("update-players", (updatedPlayers) => {
-      setPlayers(updatedPlayers);
-    });
-  
-    socket.on("game-start", ({ situation }) => {
-      console.log("Juego iniciado con situación:", situation); // Depuración
-      setSituation(situation);
-    });
-  
-    return () => {
       socket.off("update-players");
       socket.off("game-start");
+      socket.off("update-time");
     };
-  }, []);
-  
-
-  const fetchPlayers = async () => {
-    try {
-      const response = await fetch(`http://localhost:3001/game-players/${selectedGameId}`);
-      if (!response.ok) throw new Error("No se pudieron obtener los jugadores.");
-      const data = await response.json();
-      setPlayers(data.players);
-    } catch (error) {
-      console.error("Error al obtener jugadores:", error);
-    }
-  };
+  }, [selectedGameId]);
 
   const handleJoinGame = () => {
     if (!playerName.trim()) {
@@ -77,47 +71,107 @@ const GamePage = ({ params }) => {
     if (playerId) {
       socket.emit("leave-game", { gameId: selectedGameId, playerId });
       setPlayerId("");
+      setPlayerName("");
+      setIsReady(false);
+      setPlayers([]);
       router.push("/");
     }
   };
 
+  const handleSubmitMeme = () => {
+    setMemes([...memes, memeUrl]);
+    setMemeUrl("");
+  };
+
+  const formatTime = (seconds) => {
+    if (seconds <= 0) return "00:00";
+    const minutes = Math.floor(seconds / 60);
+    const remainingSeconds = seconds % 60;
+    return `${minutes.toString().padStart(2, "0")}:${remainingSeconds
+      .toString()
+      .padStart(2, "0")}`;
+  };
+
   return (
-    <div className="flex flex-col items-center space-y-4 p-4">
-      <h1 className="text-2xl font-bold">Juego: {selectedGameId}</h1>
-      {situation && <p className="text-lg font-semibold">Situación: {situation}</p>}
-      <input
-        type="text"
-        placeholder="Tu Nombre"
-        className="border rounded p-2"
-        value={playerName}
-        onChange={(e) => setPlayerName(e.target.value)}
-        disabled={!!playerId || isReady}
-      />
-      <button
-        onClick={handleJoinGame}
-        className="bg-blue-500 text-white py-2 px-4 rounded"
-        disabled={!!playerId || isReady || !playerName.trim()}
-      >
-        Unirse al juego
-      </button>
-      <button
-        onClick={handleReady}
-        className="bg-green-500 text-white py-2 px-4 rounded"
-        disabled={!playerId || isReady}
-      >
-        Estoy listo
-      </button>
-      <div className="w-full">
-        <h2 className="text-xl font-semibold">Jugadores en la sala</h2>
-        {players.map((player) => (
-          <p key={player.id} className="py-1">
-            {player.username} {player.ready ? "✅" : "❌"}
-          </p>
-        ))}
-      </div>
-      <button onClick={handleLeaveGame} className="bg-red-500 text-white py-2 px-4 rounded">
-        Salir
-      </button>
+    <div className="flex flex-col items-center space-y-6 p-6 bg-gray-100 rounded shadow-lg w-full max-w-2xl mx-auto">
+      <h1 className="text-3xl font-extrabold text-blue-600">Juego: {selectedGameId}</h1>
+
+      {situation && (
+        <div className="p-4 bg-yellow-100 rounded shadow-md w-full">
+          <h2 className="text-lg font-semibold">Situación:</h2>
+          <p className="text-gray-800">{situation}</p>
+        </div>
+      )}
+
+      {timeLeft !== null && (
+        <div className="p-4 bg-blue-100 rounded shadow-md w-full mt-4">
+          <h2 className="text-lg font-semibold">Tiempo restante para la ronda:</h2>
+          <p className="text-gray-800 text-2xl">{formatTime(timeLeft)}</p>
+        </div>
+      )}
+
+      {!playerId && (
+        <>
+          <input
+            type="text"
+            placeholder="Tu Nombre"
+            className="w-full border border-gray-300 rounded p-3 text-gray-700"
+            value={playerName}
+            onChange={(e) => setPlayerName(e.target.value)}
+            disabled={isReady}
+          />
+          <button
+            onClick={handleJoinGame}
+            className="w-full bg-blue-500 text-white py-3 rounded font-medium hover:bg-blue-600 transition disabled:bg-gray-300"
+            disabled={isReady || !playerName.trim()}
+          >
+            Unirse al juego
+          </button>
+        </>
+      )}
+
+      {playerId && !isReady && (
+        <button
+          onClick={handleReady}
+          className="w-full bg-green-500 text-white py-3 rounded font-medium hover:bg-green-600 transition"
+        >
+          Estoy listo
+        </button>
+      )}
+
+      {playerId && (
+        <>
+          <h3 className="font-semibold">Jugadores:</h3>
+          <ul>
+            {players.map((player) => (
+              <li key={player.id}>{player.username} - {player.ready ? "Listo" : "Esperando"}</li>
+            ))}
+          </ul>
+
+          <div className="mt-4">
+            <h3 className="font-semibold">Enviar Meme:</h3>
+            <input
+              type="url"
+              placeholder="URL del meme"
+              className="w-full border border-gray-300 rounded p-3 text-gray-700"
+              value={memeUrl}
+              onChange={(e) => setMemeUrl(e.target.value)}
+            />
+            <button
+              onClick={handleSubmitMeme}
+              className="w-full bg-blue-500 text-white py-3 rounded font-medium hover:bg-blue-600 mt-2"
+            >
+              Enviar Meme
+            </button>
+            <div className="mt-4">
+              <h4 className="font-semibold">Meme enviados:</h4>
+              {memes.map((meme, index) => (
+                <img key={index} src={meme} alt={`Meme ${index}`} className="w-24 h-24" />
+              ))}
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 };

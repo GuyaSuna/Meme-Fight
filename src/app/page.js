@@ -1,12 +1,22 @@
-"use client";
-import React, { useState } from "react";
+'use client'
+import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import socket from "@/Components/Socket"
 
 const Home = () => {
   const [gameId, setGameId] = useState("");
   const [playerName, setPlayerName] = useState("");
   const [games, setGames] = useState([]);
   const router = useRouter();
+
+  useEffect(() => {
+    socket.emit("leave-all-games", { playerId: socket.id });
+
+    return () => {
+      // Asegurarse de limpiar la conexión cuando el componente se desmonte
+      socket.off("update-players");
+    };
+  }, []);
 
   const handleCreateGame = async () => {
     try {
@@ -59,15 +69,7 @@ const Home = () => {
           Mostrar Salas
         </button>
       </div>
-      <div className="mb-6">
-        <input
-          type="text"
-          placeholder="Tu Nombre"
-          value={playerName}
-          onChange={(e) => setPlayerName(e.target.value)}
-          className="p-2 rounded-lg border border-gray-700 bg-gray-800 placeholder-gray-500 text-white"
-        />
-      </div>
+
       <div className="w-full max-w-md bg-gray-800 rounded-lg p-4 shadow-lg">
         <h2 className="text-2xl font-semibold mb-4">Salas Disponibles</h2>
         {games.length === 0 ? (
