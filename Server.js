@@ -21,12 +21,12 @@ let games = {};
 // Crear una nueva sala de juego
 app.post("/create-game", (req, res) => {
   const gameId = uuidv4();
-  games[gameId] = { players: [], memes: [], currentSituation: "", timer: null };
+  games[gameId] = { players: [], memes: [], currentSituation: "", timer: null, timeRemaining: 0 };
   console.log(`[Game ${gameId}] Sala creada.`);
   res.status(200).json({ gameId });
 });
 
-// Listar todas las salas disponibles
+// Obtener la lista de salas de juego
 app.get("/games", (req, res) => {
   const gameList = Object.entries(games).map(([gameId, game]) => ({
     gameId,
@@ -46,10 +46,11 @@ app.get("/game-players/:gameId", (req, res) => {
   return res.status(200).json({ players: game.players });
 });
 
-// Manejo de eventos de WebSocket
+// Manejo de conexiones por Socket.IO
 io.on("connection", (socket) => {
   console.log(`Usuario conectado: ${socket.id}`);
 
+  // Unirse a una sala
   socket.on("join-room", (gameId) => {
     if (!games[gameId]) {
       console.error(`[Game ${gameId}] Sala no encontrada para unirse.`);
@@ -59,6 +60,7 @@ io.on("connection", (socket) => {
     console.log(`[Game ${gameId}] Usuario ${socket.id} unido.`);
   });
 
+  // Unirse a un juego
   socket.on("join-game", ({ selectedGameId, playerName }, callback) => {
     const game = games[selectedGameId];
     if (!game) {
@@ -82,6 +84,7 @@ io.on("connection", (socket) => {
     console.log(`[Game ${selectedGameId}] Jugador agregado: ${playerName}`);
   });
 
+  // Listo para jugar
   socket.on("player-ready", ({ gameId, playerId }) => {
     const game = games[gameId];
     if (!game) return;
@@ -105,14 +108,16 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Enviar un meme
   socket.on("send-meme", ({ gameId, memeUrl }) => {
     const game = games[gameId];
     if (!game) return;
 
-    game.memes.push({ memeUrl, playerId: socket.id });
+    game.memes.push({ memeUrl, playerId: socket.id, votes: 0 });
     io.to(gameId).emit("update-memes", game.memes);
   });
 
+  // Salir de una sala específica
   socket.on("leave-game", ({ gameId, playerId }) => {
     const game = games[gameId];
     if (!game) return;
@@ -122,11 +127,33 @@ io.on("connection", (socket) => {
     socket.leave(gameId);
   });
 
+  // Salir de todas las salas
+  socket.on("leave-all-games", ({ playerId }) => {
+    Object.keys(games).forEach((gameId) => {
+      const game = games[gameId];
+      if (game) {
+        game.players = game.players.filter((p) => p.id !== playerId);
+        socket.leave(gameId);
+        io.to(gameId).emit("update-players", game.players);
+        console.log(`[Game ${gameId}] Jugador ${playerId} eliminado.`);
+      }
+    });
+  });
+
+  // Desconexión del usuario
   socket.on("disconnect", () => {
+    Object.keys(games).forEach((gameId) => {
+      const game = games[gameId];
+      if (game) {
+        game.players = game.players.filter((p) => p.id !== socket.id);
+        io.to(gameId).emit("update-players", game.players);
+      }
+    });
     console.log(`Usuario desconectado: ${socket.id}`);
   });
 });
 
+// Generar una situación aleatoria para el juego
 const generateRandomSituation = () => {
   const situations = [
     "Estás en una fiesta muy rara.",
@@ -137,13 +164,7 @@ const generateRandomSituation = () => {
   return situations[Math.floor(Math.random() * situations.length)];
 };
 
-const calculateWinner = (gameId) => {
-  const game = games[gameId];
-  if (!game) return null;
-
-  return game.players[Math.floor(Math.random() * game.players.length)];
-};
-
+// Iniciar una ronda
 const startRound = (gameId) => {
   const game = games[gameId];
   if (!game) {
@@ -151,25 +172,24 @@ const startRound = (gameId) => {
     return;
   }
 
-  let timeRemaining = 60;
-  console.log(`[Game ${gameId}] Iniciando ronda con ${timeRemaining} segundos.`);
+  game.timeRemaining = 60; // Inicializa el tiempo dentro del objeto del juego.
+  console.log(`[Game ${gameId}] Iniciando ronda con ${game.timeRemaining} segundos.`);
 
   game.timer = setInterval(() => {
-    if (timeRemaining >= 0) {
-      const serverTimestamp = Date.now();
-      io.to(gameId).emit("update-time", { 
-        timeRemaining, 
-        serverTimestamp 
+    if (game.timeRemaining > 0) {
+      io.to(gameId).emit("update-time", {
+        timeRemaining: game.timeRemaining,
+        serverTimestamp: Date.now(),
       });
-      timeRemaining--;
+      game.timeRemaining--;
     } else {
       clearInterval(game.timer);
-      io.to(gameId).emit("round-end", { winner: calculateWinner(gameId) });
-      console.log(`[Game ${gameId}] Fin de la ronda.`);
+      io.to(gameId).emit("round-end", { memes: game.memes });
     }
   }, 1000);
 };
 
+// Iniciar el servidor
 server.listen(3001, () => {
   console.log("Servidor iniciado en http://localhost:3001");
 });

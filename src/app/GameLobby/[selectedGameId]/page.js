@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import socket from "@/Components/Socket";
 
 const GamePage = ({ params }) => {
-  const { selectedGameId } = React.use(params); // Corregido: No necesitas `React.use`
+  const { selectedGameId } = React.use(params); 
   const [players, setPlayers] = useState([]);
   const [playerName, setPlayerName] = useState("");
   const [playerId, setPlayerId] = useState("");
@@ -13,6 +13,7 @@ const GamePage = ({ params }) => {
   const [memeUrl, setMemeUrl] = useState("");
   const [memes, setMemes] = useState([]);
   const [timeLeft, setTimeLeft] = useState(null);
+  const [roundMemes, setRoundMemes] = useState([]);
   const router = useRouter();
 
   useEffect(() => {
@@ -46,6 +47,26 @@ const GamePage = ({ params }) => {
       socket.off("update-time");
     };
   }, [selectedGameId]);
+
+  useEffect(() => {
+    socket.on("round-end", ({ memes }) => {
+      console.log("Memes recibidos al finalizar la ronda:", memes); // Depuración
+      setRoundMemes(memes);
+    });
+
+    socket.on("update-memes", (updatedMemes) => {
+      setRoundMemes(updatedMemes);
+    });
+
+    return () => {
+      socket.off("round-end");
+      socket.off("update-memes");
+    };
+  }, []);
+
+  const handleVoteMeme = (memeUrl) => {
+    socket.emit("vote-meme", { gameId: selectedGameId, memeUrl });
+  };
 
   const handleJoinGame = () => {
     if (!playerName.trim()) {
@@ -164,13 +185,39 @@ const GamePage = ({ params }) => {
               Enviar Meme
             </button>
             <div className="mt-4">
-              <h4 className="font-semibold">Meme enviados:</h4>
+              <h4 className="font-semibold">Memes enviados:</h4>
               {memes.map((meme, index) => (
                 <img key={index} src={meme} alt={`Meme ${index}`} className="w-24 h-24" />
               ))}
             </div>
           </div>
         </>
+      )}
+      
+      {Array.isArray(roundMemes) && roundMemes.length > 0 && (
+        <div className="mt-6">
+          <h3 className="font-semibold">Memes de la ronda:</h3>
+          <div className="grid grid-cols-2 gap-4">
+            {roundMemes.map((meme, index) => (
+              <div key={index} className="p-2 border rounded shadow-sm">
+                <img
+                  src={meme.memeUrl}
+                  alt={`Meme ${index}`}
+                  className="w-full h-auto rounded"
+                />
+                <button
+                  onClick={() => handleVoteMeme(meme.memeUrl)}
+                  className="mt-2 bg-green-500 text-white py-2 px-4 rounded hover:bg-green-600"
+                >
+                  Votar
+                </button>
+                <p className="mt-2 text-sm text-gray-600">
+                  Votos: {meme.votes || 0}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

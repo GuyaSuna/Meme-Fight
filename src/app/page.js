@@ -13,7 +13,6 @@ const Home = () => {
     socket.emit("leave-all-games", { playerId: socket.id });
 
     return () => {
-      // Asegurarse de limpiar la conexión cuando el componente se desmonte
       socket.off("update-players");
     };
   }, []);
